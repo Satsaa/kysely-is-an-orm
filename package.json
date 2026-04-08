@@ -1,0 +1,26 @@
+﻿{
+	"name": "kysely-is-an-orm",
+	"version": "0.0.1",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": {
+			"import": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"test:types": "tsgo --noEmit -p tsconfig.test.json",
+		"test:sql": "tsx test/sql-tests.ts"
+	},
+	"dependencies": {
+		"kysely": "^0.28.11"
+	},
+	"devDependencies": {
+		"type-test-core": "^0.0.1",
+		"@types/node": "^25.2.1",
+		"pg": "^8.18.0",
+		"tsx": "^4.21.0",
+		"@typescript/native-preview": "^7.0.0-dev.20260325.1"
+	}
+}
+

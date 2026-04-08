@@ -1,0 +1,248 @@
+import {
+	Kysely,
+	sql,
+	type Selectable,
+} from "kysely";
+import { type MetaDB } from "./meta.js";
+
+type AnyMeta = MetaDB<Record<string, any>>;
+
+import type {
+	RelationNames,
+	RelationTarget,
+	RelationToColumn,
+	RelationResultType,
+	RelationResultTypeWithModifier,
+	RelationResultTypeWithVariant,
+	ProjectionNames,
+} from "./types.js";
+import { type RelBuilder, type RelBuilderFactory } from "./relation-builder.js";
+import type { OrmSelectQueryBuilder } from "./select-builder.js";
+import {
+	OrmRelationUpdateBuilder,
+	OrmRelationDeleteBuilder,
+	OrmRelationInsertBuilder,
+	isRelationMutationBuilder,
+} from "./relation-mutation-builder.js";
+import {
+	type RelationRequest,
+	resolveWithRelatedArgs,
+	buildToManyLateral,
+	buildToOneSubquery,
+	buildMutationCTEs,
+	buildMutationCTERef,
+	resetCTECounter,
+} from "./helpers.js";
+
+const CTE_ALIAS = "_mutation";
+
+export class OrmReturningBuilder<
+	DB extends Record<string, any>,
+	TB extends keyof DB & string,
+	O,
+	M extends MetaDB<DB>,
+> {
+	constructor(
+		private readonly _db: Kysely<DB>,
+		private readonly _meta: M,
+		private readonly _table: TB,
+		private readonly _mutationQuery: any,
+		private readonly _relations: RelationRequest[] = [],
+		private readonly _rootWheres: any[][] = [],
+	) {}
+
+	withRelated<R extends RelationNames<M, TB>>(
+		name: R,
+	): OrmReturningBuilder<DB, TB, O & RelationResultType<DB, M, TB, R>, M>;
+	withRelated<R extends RelationNames<M, TB>, V extends string>(
+		name: R,
+		variant: V & ProjectionNames<M, RelationTarget<M, TB, R>>,
+	): OrmReturningBuilder<DB, TB, O & RelationResultTypeWithVariant<DB, M, TB, R, R, V>, M>;
+	withRelated<R extends RelationNames<M, TB>, RO>(
+		name: R,
+		modifier: (qb: OrmSelectQueryBuilder<DB, RelationTarget<M, TB, R>, {}, M, false, RelationToColumn<M, TB, R>>) => OrmSelectQueryBuilder<DB, RelationTarget<M, TB, R>, RO, M> | OrmRelationUpdateBuilder<DB, RelationTarget<M, TB, R>, M, RO, RelationToColumn<M, TB, R>> | OrmRelationDeleteBuilder<DB, RelationTarget<M, TB, R>, M, RelationToColumn<M, TB, R>> | OrmRelationInsertBuilder<DB, RelationTarget<M, TB, R>, M, RO, RelationToColumn<M, TB, R>>,
+	): OrmReturningBuilder<DB, TB, O & RelationResultTypeWithModifier<DB, M, TB, R, R, RO>, M>;
+	withRelated<R extends RelationNames<M, TB>, A extends string>(
+		builder: (b: RelBuilderFactory<DB, M, TB>) => RelBuilder<DB, TB, R, RelationTarget<M, TB, R>, A>,
+	): OrmReturningBuilder<DB, TB, O & RelationResultType<DB, M, TB, R, A>, M>;
+	withRelated<R extends RelationNames<M, TB>, A extends string, V extends string>(
+		builder: (b: RelBuilderFactory<DB, M, TB>) => RelBuilder<DB, TB, R, RelationTarget<M, TB, R>, A>,
+		variant: V & ProjectionNames<M, RelationTarget<M, TB, R>>,
+	): OrmReturningBuilder<DB, TB, O & RelationResultTypeWithVariant<DB, M, TB, R, A, V>, M>;
+	withRelated<R extends RelationNames<M, TB>, A extends string, RO>(
+		builder: (b: RelBuilderFactory<DB, M, TB>) => RelBuilder<DB, TB, R, RelationTarget<M, TB, R>, A>,
+		modifier: (qb: OrmSelectQueryBuilder<DB, RelationTarget<M, TB, R>, {}, M, false, RelationToColumn<M, TB, R>>) => OrmSelectQueryBuilder<DB, RelationTarget<M, TB, R>, RO, M> | OrmRelationUpdateBuilder<DB, RelationTarget<M, TB, R>, M, RO, RelationToColumn<M, TB, R>> | OrmRelationDeleteBuilder<DB, RelationTarget<M, TB, R>, M, RelationToColumn<M, TB, R>> | OrmRelationInsertBuilder<DB, RelationTarget<M, TB, R>, M, RO, RelationToColumn<M, TB, R>>,
+	): OrmReturningBuilder<DB, TB, O & RelationResultTypeWithModifier<DB, M, TB, R, A, RO>, M>;
+	withRelated(
+		nameOrBuilder: string | ((b: any) => RelBuilder<any, any, any, any, any>),
+		variantOrModifier?: string | ((qb: any) => any),
+	): OrmReturningBuilder<DB, TB, any, M> {
+		const modifier = typeof variantOrModifier === "function" ? variantOrModifier : undefined;
+		const variant = typeof variantOrModifier === "string" ? variantOrModifier : undefined;
+		const request = resolveWithRelatedArgs(this._meta as AnyMeta, this._table, nameOrBuilder);
+		if (variant) request.variant = variant;
+
+		if (modifier) {
+			const probeQb = this._createProbeQb(request.resolved.targetTable);
+			const result = modifier(probeQb);
+			if (isRelationMutationBuilder(result)) {
+				request.mutation = result._toMutation();
+			} else {
+				request.modifier = modifier;
+			}
+		}
+
+		return new OrmReturningBuilder(this._db, this._meta, this._table, this._mutationQuery, [...this._relations, request], this._rootWheres);
+	}
+
+	mutateRelated(
+		nameOrBuilder: string | ((b: any) => RelBuilder<any, any, any, any, any>),
+		modifier: (qb: any) => any,
+	): OrmReturningBuilder<DB, TB, O, M> {
+		const request = resolveWithRelatedArgs(this._meta as AnyMeta, this._table, nameOrBuilder);
+		request.fireAndForget = true;
+
+		const probeQb = this._createProbeQb(request.resolved.targetTable);
+		const result = modifier(probeQb);
+		if (isRelationMutationBuilder(result)) {
+			request.mutation = result._toMutation();
+			if (request.mutation.nested.some(n => !n.fireAndForget)) {
+				throw new Error("withRelated() cannot be used inside mutateRelated() — mutateRelated is fire-and-forget and does not return data. Use mutateRelated() for nested mutations instead.");
+			}
+		} else {
+			throw new Error("mutateRelated callback must return .update(), .delete(), or .insert()");
+		}
+
+		return new OrmReturningBuilder(this._db, this._meta, this._table, this._mutationQuery, [...this._relations, request], this._rootWheres);
+	}
+
+	/**
+	 * Create a lightweight probe for detecting mutation vs read in callbacks.
+	 * Avoids importing OrmSelectQueryBuilder (circular dependency).
+	 * The probe only needs .update(), .delete(), .insert() to detect mutations,
+	 * and acts as a passthrough Proxy for read modifiers (where, orderBy, etc.).
+	 */
+	private _createProbeQb(targetTable: string) {
+		const meta = this._meta as AnyMeta;
+		const inner = this._db.selectFrom(targetTable);
+		const probe = {
+			update: () => new OrmRelationUpdateBuilder(meta, targetTable),
+			delete: () => new OrmRelationDeleteBuilder(meta, targetTable),
+			insert: () => new OrmRelationInsertBuilder(meta, targetTable),
+		};
+		// For read modifiers: return a Proxy that delegates to the inner SelectQueryBuilder
+		// and wraps results back in the probe shape
+		return new Proxy(probe, {
+			get(target, prop, receiver) {
+				if (prop in target) return Reflect.get(target, prop, receiver);
+				const innerVal = (inner as any)[prop];
+				if (typeof innerVal !== "function") return innerVal;
+				return (...args: any[]) => {
+					const result = innerVal.apply(inner, args);
+					// If it returns a query builder, wrap it back as a probe
+					if (result && typeof result === "object" && typeof result.compile === "function") {
+						return result;
+					}
+					return result;
+				};
+			},
+		});
+	}
+
+	async execute(): Promise<(Selectable<DB[TB]> & O)[]> {
+		return await this._buildQuery().execute();
+	}
+
+	async executeTakeFirst(): Promise<(Selectable<DB[TB]> & O) | undefined> {
+		return (await this.execute())[0];
+	}
+
+	async executeTakeFirstOrThrow(error?: Error | (() => Error)): Promise<Selectable<DB[TB]> & O> {
+		const r = await this.executeTakeFirst();
+		if (r === undefined) throw error instanceof Error ? error : typeof error === "function" ? error() : new Error(`No "${this._table}" found after mutation`);
+		return r;
+	}
+
+	compile() {
+		return this._buildQuery().compile();
+	}
+
+	/**
+	 * Build the query.
+	 *
+	 * Without relations: just the mutation with RETURNING *.
+	 * With relations: CTE wrapping the mutation, outer SELECT with subqueries.
+	 *
+	 * WITH <mutation_ctes...>, _mutation AS (<mutation> RETURNING *)
+	 * SELECT _mutation.*, <relation subqueries>
+	 * FROM _mutation
+	 */
+	private _buildQuery() {
+		if (this._relations.length === 0) {
+			return this._mutationQuery.returningAll();
+		}
+
+		resetCTECounter();
+
+		// Separate relations into reads and mutations
+		const readRels: RelationRequest[] = [];
+		const mutationRels: RelationRequest[] = [];
+		for (const rel of this._relations) {
+			if (rel.mutation) {
+				mutationRels.push(rel);
+			} else {
+				readRels.push(rel);
+			}
+		}
+
+		// Build mutation CTEs first
+		let mutationCTEResult: ReturnType<typeof buildMutationCTEs> | null = null;
+		if (mutationRels.length > 0) {
+			mutationCTEResult = buildMutationCTEs(
+				this._db, this._meta as AnyMeta,
+				this._table, this._rootWheres,
+				mutationRels,
+			);
+		}
+
+		// Start building: add mutation CTEs, then the main mutation CTE, then SELECT
+		let query: any = this._db;
+
+		// Add relation mutation CTEs
+		if (mutationCTEResult) {
+			for (const cte of mutationCTEResult.ctes) {
+				query = query.with(cte.name, () => cte.query);
+			}
+		}
+
+		// Add the main mutation CTE
+		query = query
+			.with(CTE_ALIAS, () => this._mutationQuery.returningAll())
+			.selectFrom(CTE_ALIAS)
+			.selectAll(CTE_ALIAS);
+
+		// Add mutation CTE references
+		if (mutationCTEResult) {
+			for (const ref of mutationCTEResult.refs) {
+				if (!ref.fireAndForget) {
+					query = query.select(buildMutationCTERef(CTE_ALIAS, ref));
+				}
+			}
+		}
+
+		// Add read relations
+		for (const rel of readRels) {
+			if (rel.resolved.type === "many") {
+				const { lateralExpr, latAlias, outputAlias } = buildToManyLateral(
+					this._db, this._meta as AnyMeta, CTE_ALIAS, rel,
+				);
+				query = query.leftJoinLateral(lateralExpr, (join: any) => join.onTrue());
+				query = query.select(sql.ref(`${latAlias}.data`).as(outputAlias));
+			} else {
+				query = query.select(buildToOneSubquery(this._db, this._meta as AnyMeta, CTE_ALIAS, rel));
+			}
+		}
+
+		return query;
+	}
+}
