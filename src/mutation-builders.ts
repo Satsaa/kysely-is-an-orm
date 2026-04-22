@@ -67,7 +67,7 @@ export class OrmUpdateQueryBuilder<
 	) {}
 
 	set(values: Updateable<DB[TB]>): OrmUpdateQueryBuilder<DB, TB, M> {
-		return new OrmUpdateQueryBuilder(this._db, this._meta, this._table, this._inner.set(values), this._wheres);
+		return new OrmUpdateQueryBuilder(this._db, this._meta, this._table, (this._inner as any).set(values), this._wheres);
 	}
 
 	where<RE extends ReferenceExpression<DB, TB>>(
