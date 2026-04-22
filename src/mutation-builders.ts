@@ -13,6 +13,7 @@ import {
 	type SqlBool,
 	type Insertable,
 	type Updateable,
+	type UpdateObjectExpression,
 } from "kysely";
 import { type MetaDB } from "./meta.js";
 import { OrmReturningBuilder } from "./returning-builder.js";
@@ -66,8 +67,8 @@ export class OrmUpdateQueryBuilder<
 		private readonly _wheres: any[][] = [],
 	) {}
 
-	set(values: Updateable<DB[TB]>): OrmUpdateQueryBuilder<DB, TB, M> {
-		return new OrmUpdateQueryBuilder(this._db, this._meta, this._table, (this._inner as any).set(values), this._wheres);
+	set(values: UpdateObjectExpression<DB, TB, TB>): OrmUpdateQueryBuilder<DB, TB, M> {
+		return new OrmUpdateQueryBuilder(this._db, this._meta, this._table, this._inner.set(values), this._wheres);
 	}
 
 	where<RE extends ReferenceExpression<DB, TB>>(
