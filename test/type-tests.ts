@@ -544,6 +544,44 @@ async function testInsertTypes() {
 	type _I2 = Expect<HasKey<InsertedRow, "name">>;
 	type _I3 = Expect<HasKey<InsertedRow, "active">>;
 
+	// returning() narrows root mutation output to explicit columns
+	const insertedId = await db
+		.insertInto("markets")
+		.values({ name: "Test", location: "Helsinki", active: true })
+		.returning("id")
+		.execute();
+
+	type InsertedIdRow = typeof insertedId[0];
+	type _I12 = Expect<HasKey<InsertedIdRow, "id">>;
+	type _I13 = Expect<NotHasKey<InsertedIdRow, "name">>;
+	type _I14 = Expect<NotHasKey<InsertedIdRow, "active">>;
+
+	const insertedSummary = await db
+		.insertInto("markets")
+		.values({ name: "Test", location: "Helsinki", active: true })
+		.returning(["id", "name"])
+		.execute();
+
+	type InsertedSummaryRow = typeof insertedSummary[0];
+	type _I15 = Expect<HasKey<InsertedSummaryRow, "id">>;
+	type _I16 = Expect<HasKey<InsertedSummaryRow, "name">>;
+	type _I17 = Expect<NotHasKey<InsertedSummaryRow, "location">>;
+
+	const insertedChainedReturning = await db
+		.insertInto("markets")
+		.values({ name: "Test", location: "Helsinki", active: true })
+		.returning("id")
+		.returning("name")
+		.execute();
+
+	type InsertedChainedReturningRow = typeof insertedChainedReturning[0];
+	type _I23 = Expect<HasKey<InsertedChainedReturningRow, "id">>;
+	type _I24 = Expect<HasKey<InsertedChainedReturningRow, "name">>;
+	type _I25 = Expect<NotHasKey<InsertedChainedReturningRow, "active">>;
+
+	// @ts-expect-error - invalid returned column
+	db.insertInto("markets").values({ name: "T", location: "H", active: true }).returning("nonexistent");
+
 	// returningAll + withRelated
 	const withRel = await db
 		.insertInto("markets")
@@ -569,6 +607,48 @@ async function testInsertTypes() {
 	type SellerInsRow = typeof sellerInsert[0];
 	type _I8 = Expect<HasKey<SellerInsRow, "market">>;
 	type _I9 = Expect<Extends<SellerInsRow["market"], Selectable<MarketTable> | null>>;
+
+	// returning() + withRelated keeps root columns narrowed and relation types present
+	const sellerInsertIdWithMarket = await db
+		.insertInto("sellers")
+		.values({ name: "Test", market_id: 1, booth_number: "A1" })
+		.returning("id")
+		.withRelated("market")
+		.execute();
+
+	type SellerInsertIdWithMarketRow = typeof sellerInsertIdWithMarket[0];
+	type _I18 = Expect<HasKey<SellerInsertIdWithMarketRow, "id">>;
+	type _I19 = Expect<NotHasKey<SellerInsertIdWithMarketRow, "name">>;
+	type _I20 = Expect<NotHasKey<SellerInsertIdWithMarketRow, "market_id">>;
+	type _I21 = Expect<HasKey<SellerInsertIdWithMarketRow, "market">>;
+	type _I22 = Expect<Extends<SellerInsertIdWithMarketRow["market"], Selectable<MarketTable> | null>>;
+
+	const insertedChainedReturningWithRel = await db
+		.insertInto("markets")
+		.values({ name: "Test", location: "Helsinki", active: true })
+		.returning("id")
+		.returning("name")
+		.withRelated("sellers")
+		.execute();
+
+	type InsertedChainedReturningWithRelRow = typeof insertedChainedReturningWithRel[0];
+	type _I26 = Expect<HasKey<InsertedChainedReturningWithRelRow, "id">>;
+	type _I27 = Expect<HasKey<InsertedChainedReturningWithRelRow, "name">>;
+	type _I28 = Expect<NotHasKey<InsertedChainedReturningWithRelRow, "active">>;
+	type _I29 = Expect<HasKey<InsertedChainedReturningWithRelRow, "sellers">>;
+
+	const insertedNameWithRel = await db
+		.insertInto("markets")
+		.values({ name: "Test", location: "Helsinki", active: true })
+		.returning("name")
+		.withRelated("sellers")
+		.execute();
+
+	type InsertedNameWithRelRow = typeof insertedNameWithRel[0];
+	type _I30 = Expect<HasKey<InsertedNameWithRelRow, "name">>;
+	type _I31 = Expect<NotHasKey<InsertedNameWithRelRow, "id">>;
+	type _I32 = Expect<NotHasKey<InsertedNameWithRelRow, "active">>;
+	type _I33 = Expect<HasKey<InsertedNameWithRelRow, "sellers">>;
 
 	// @ts-expect-error - invalid relation on markets
 	db.insertInto("markets").values({ name: "T", location: "H", active: true }).returningAll().withRelated("market");
@@ -632,8 +712,52 @@ async function testUpdateTypes() {
 	type _U4 = Expect<HasKey<UpdRow, "tags">>;
 	type _U5 = Expect<Extends<UpdRow["sellers"], Selectable<SellerTable>[]>>;
 
+	const updatedId = await db
+		.updateTable("markets")
+		.set({ name: "Updated" })
+		.where("id", "=", 1)
+		.returning("id")
+		.execute();
+
+	type UpdatedIdRow = typeof updatedId[0];
+	type _U6 = Expect<HasKey<UpdatedIdRow, "id">>;
+	type _U7 = Expect<NotHasKey<UpdatedIdRow, "name">>;
+
+	const updatedIdWithMarket = await db
+		.updateTable("sellers")
+		.set({ name: "Updated" })
+		.where("id", "=", 1)
+		.returning("id")
+		.withRelated("market")
+		.execute();
+
+	type UpdatedIdWithMarketRow = typeof updatedIdWithMarket[0];
+	type _U8 = Expect<HasKey<UpdatedIdWithMarketRow, "id">>;
+	type _U9 = Expect<NotHasKey<UpdatedIdWithMarketRow, "market_id">>;
+	type _U10 = Expect<HasKey<UpdatedIdWithMarketRow, "market">>;
+	type _U11 = Expect<Extends<UpdatedIdWithMarketRow["market"], Selectable<MarketTable> | null>>;
+
+	const updatedIdWithMutatedSellers = await db
+		.updateTable("markets")
+		.set({ name: "Updated" })
+		.where("id", "=", 1)
+		.returning("id")
+		.withRelated("sellers", (qb) =>
+			qb.update().set({ booth_number: "VIP" }),
+		)
+		.execute();
+
+	type UpdatedIdWithMutatedSellersRow = typeof updatedIdWithMutatedSellers[0];
+	type _U12 = Expect<HasKey<UpdatedIdWithMutatedSellersRow, "id">>;
+	type _U13 = Expect<NotHasKey<UpdatedIdWithMutatedSellersRow, "name">>;
+	type _U14 = Expect<HasKey<UpdatedIdWithMutatedSellersRow, "sellers">>;
+	type _U15 = Expect<Extends<UpdatedIdWithMutatedSellersRow["sellers"], Selectable<SellerTable>[]>>;
+
 	// @ts-expect-error - invalid relation
 	db.updateTable("markets").set({ name: "X" }).returningAll().withRelated("nonexistent");
+
+	// @ts-expect-error - invalid returned column
+	db.updateTable("markets").set({ name: "X" }).returning("nonexistent");
 }
 
 // ============================================================================
@@ -663,6 +787,33 @@ async function testDeleteTypes() {
 	type _D4 = Expect<HasKey<DelRow, "items">>;
 	type _D5 = Expect<Extends<DelRow["market"], Selectable<MarketTable> | null>>;
 	type _D6 = Expect<Extends<DelRow["items"], Selectable<ItemTable>[]>>;
+
+	const deletedId = await db
+		.deleteFrom("markets")
+		.where("id", "=", 1)
+		.returning("id")
+		.execute();
+
+	type DeletedIdRow = typeof deletedId[0];
+	type _D7 = Expect<HasKey<DeletedIdRow, "id">>;
+	type _D8 = Expect<NotHasKey<DeletedIdRow, "name">>;
+
+	const deletedIdWithRelations = await db
+		.deleteFrom("sellers")
+		.where("id", "=", 1)
+		.returning("id")
+		.withRelated("market")
+		.withRelated("items")
+		.execute();
+
+	type DeletedIdWithRelationsRow = typeof deletedIdWithRelations[0];
+	type _D9 = Expect<HasKey<DeletedIdWithRelationsRow, "id">>;
+	type _D10 = Expect<NotHasKey<DeletedIdWithRelationsRow, "market_id">>;
+	type _D11 = Expect<HasKey<DeletedIdWithRelationsRow, "market">>;
+	type _D12 = Expect<HasKey<DeletedIdWithRelationsRow, "items">>;
+
+	// @ts-expect-error - invalid returned column
+	db.deleteFrom("markets").returning("nonexistent");
 }
 
 // ============================================================================

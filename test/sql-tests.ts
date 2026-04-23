@@ -564,6 +564,32 @@ async function runTests() {
 		assertContains(n, "returning *", "has RETURNING *");
 	});
 
+	await test("insertInto: returning explicit id without relations", () => {
+		const { sql } = db
+			.insertInto("markets")
+			.values({ name: "Test", location: "Helsinki", active: true })
+			.returning("id")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'insert into "markets"', "has INSERT");
+		assertContains(n, 'returning "markets"."id"', "returns id");
+		assertNotContains(n, "returning *", "does not return wildcard");
+	});
+
+	await test("insertInto: multiple returning calls accumulate explicit columns", () => {
+		const { sql } = db
+			.insertInto("markets")
+			.values({ name: "Test", location: "Helsinki", active: true })
+			.returning("id")
+			.returning("name")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'returning "markets"."id", "markets"."name"', "returns id and name");
+		assertNotContains(n, '"markets"."location"', "does not return unrequested location");
+		assertNotContains(n, '"markets"."active"', "does not return unrequested active");
+		assertNotContains(n, "returning *", "does not return wildcard");
+	});
+
 	// -----------------------------------------------------------------------
 	// INSERT: returningAll + withRelated (CTE)
 	// -----------------------------------------------------------------------
@@ -603,6 +629,57 @@ async function runTests() {
 		assertContains(n, "limit", "toOne has LIMIT 1");
 		// Should NOT use LEFT JOIN (scalar subquery instead)
 		assertNotContains(n, "left join", "no LEFT JOIN in CTE context");
+	});
+
+	await test("insertInto: returning explicit id + withRelated toMany", () => {
+		const { sql } = db
+			.insertInto("markets")
+			.values({ name: "New Market", location: "Tampere", active: true })
+			.returning("id")
+			.withRelated("sellers")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'with "_mutation" as', "has CTE");
+		assertContains(n, 'returning "markets"."id"', "CTE returns requested id");
+		assertContains(n, 'select "_mutation"."id"', "outer select includes requested id");
+		assertContains(n, "left join lateral", "uses relation lateral");
+		assertContains(n, '"sellers"."market_id" = "_mutation"."id"', "relation can correlate on returned id");
+		assertNotContains(n, "returning *", "does not return wildcard");
+		assertNotContains(n, '"_mutation".*', "outer select does not expose wildcard");
+	});
+
+	await test("insertInto: multiple returning calls + withRelated expose only requested columns", () => {
+		const { sql } = db
+			.insertInto("markets")
+			.values({ name: "New Market", location: "Tampere", active: true })
+			.returning("id")
+			.returning("name")
+			.withRelated("sellers")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'returning "markets"."id", "markets"."name"', "CTE returns requested columns");
+		assertContains(n, 'select "_mutation"."id", "_mutation"."name"', "outer select includes requested columns");
+		assertContains(n, '"sellers"."market_id" = "_mutation"."id"', "relation can correlate");
+		assertNotContains(n, '"markets"."location"', "CTE does not return unrequested location");
+		assertNotContains(n, '"markets"."active"', "CTE does not return unrequested active");
+		assertNotContains(n, '"_mutation".*', "outer select does not expose wildcard");
+	});
+
+	await test("insertInto: returning non-correlation column + withRelated adds hidden correlation key", () => {
+		const { sql } = db
+			.insertInto("markets")
+			.values({ name: "New Market", location: "Tampere", active: true })
+			.returning("name")
+			.withRelated("sellers")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'returning "markets"."name", "markets"."id"', "CTE returns requested name plus hidden id");
+		assertContains(n, 'select "_mutation"."name"', "outer select includes requested name");
+		assertContains(n, '"sellers"."market_id" = "_mutation"."id"', "relation can correlate on hidden id");
+		assertNotContains(n, 'select "_mutation"."name", "_mutation"."id"', "outer select does not expose hidden id");
+		assertNotContains(n, '"markets"."location"', "CTE does not return unrequested location");
+		assertNotContains(n, '"markets"."active"', "CTE does not return unrequested active");
+		assertNotContains(n, '"_mutation".*', "outer select does not expose wildcard");
 	});
 
 	await test("insertInto: returningAll + multiple withRelated", () => {
@@ -649,6 +726,19 @@ async function runTests() {
 		assertContains(n, "returning *", "has RETURNING *");
 	});
 
+	await test("updateTable: returning explicit id without relations", () => {
+		const { sql } = db
+			.updateTable("markets")
+			.set({ name: "Updated" })
+			.where("id", "=", 1)
+			.returning("id")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'update "markets"', "has UPDATE");
+		assertContains(n, 'returning "markets"."id"', "returns id");
+		assertNotContains(n, "returning *", "does not return wildcard");
+	});
+
 	// -----------------------------------------------------------------------
 	// UPDATE: returningAll + withRelated (CTE)
 	// -----------------------------------------------------------------------
@@ -691,6 +781,44 @@ async function runTests() {
 		assertContains(n, "limit", "toOne LIMIT 1");
 	});
 
+	await test("updateTable: returning explicit id + withRelated toOne keeps hidden correlation column", () => {
+		const { sql } = db
+			.updateTable("sellers")
+			.set({ name: "Updated Seller" })
+			.where("id", "=", 5)
+			.returning("id")
+			.withRelated("market")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'with "_mutation" as', "has CTE");
+		assertContains(n, 'returning "sellers"."id", "sellers"."market_id"', "CTE returns id plus hidden market_id");
+		assertContains(n, 'select "_mutation"."id"', "outer select includes requested id");
+		assertContains(n, '"markets"."id" = "_mutation"."market_id"', "toOne can correlate on hidden market_id");
+		assertContains(n, "to_jsonb", "has relation subquery");
+		assertNotContains(n, '"sellers"."name"', "CTE does not return unrequested name");
+		assertNotContains(n, '"sellers"."booth_number"', "CTE does not return unrequested booth_number");
+		assertNotContains(n, '"_mutation".*', "outer select does not expose wildcard");
+	});
+
+	await test("updateTable: returning explicit id + withRelated mutation", () => {
+		const { sql } = db
+			.updateTable("markets")
+			.set({ name: "Updated Market" })
+			.where("id", "=", 1)
+			.returning("id")
+			.withRelated("sellers", (qb) =>
+				qb.update().set({ booth_number: "VIP" }),
+			)
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'with "_upd_sellers_', "has relation mutation CTE");
+		assertContains(n, 'returning "markets"."id"', "root CTE returns requested id");
+		assertContains(n, 'select "_mutation"."id"', "outer select includes requested id");
+		assertContains(n, 'update "sellers"', "relation mutation updates sellers");
+		assertContains(n, "jsonb_agg", "relation mutation result is selected");
+		assertNotContains(n, '"_mutation".*', "outer select does not expose wildcard");
+	});
+
 	await test("updateTable: CTE parameters are correctly ordered", () => {
 		const { sql, parameters } = db
 			.updateTable("markets")
@@ -723,6 +851,18 @@ async function runTests() {
 		assertContains(n, '"id" = $1', "has WHERE");
 	});
 
+	await test("deleteFrom: returning explicit id without relations", () => {
+		const { sql } = db
+			.deleteFrom("markets")
+			.where("id", "=", 1)
+			.returning("id")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'delete from "markets"', "has DELETE");
+		assertContains(n, 'returning "markets"."id"', "returns id");
+		assertNotContains(n, "returning *", "does not return wildcard");
+	});
+
 	await test("deleteFrom: returningAll + withRelated", () => {
 		const { sql } = db
 			.deleteFrom("sellers")
@@ -736,6 +876,25 @@ async function runTests() {
 		assertContains(n, 'delete from "sellers"', "CTE contains DELETE");
 		assertContains(n, "to_jsonb", "has toOne (market)");
 		assertContains(n, "jsonb_agg", "has toMany (items)");
+	});
+
+	await test("deleteFrom: returning explicit id + withRelated keeps hidden relation columns", () => {
+		const { sql } = db
+			.deleteFrom("sellers")
+			.where("id", "=", 1)
+			.returning("id")
+			.withRelated("market")
+			.withRelated("items")
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'with "_mutation" as', "has CTE");
+		assertContains(n, 'returning "sellers"."id", "sellers"."market_id"', "CTE returns id plus hidden relation keys");
+		assertContains(n, 'select "_mutation"."id"', "outer select includes requested id");
+		assertContains(n, '"markets"."id" = "_mutation"."market_id"', "toOne can correlate on hidden market_id");
+		assertContains(n, '"items"."seller_id" = "_mutation"."id"', "toMany can correlate on requested id");
+		assertNotContains(n, '"sellers"."name"', "CTE does not return unrequested name");
+		assertNotContains(n, '"sellers"."booth_number"', "CTE does not return unrequested booth_number");
+		assertNotContains(n, '"_mutation".*', "outer select does not expose wildcard");
 	});
 
 	// -----------------------------------------------------------------------

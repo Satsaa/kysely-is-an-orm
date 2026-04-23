@@ -35,6 +35,49 @@ import {
 } from "./helpers.js";
 
 const CTE_ALIAS = "_mutation";
+type ReturningSelection = string | readonly string[] | undefined;
+
+type SelectableColumn<DB extends Record<string, any>, TB extends keyof DB & string> =
+	Extract<keyof Selectable<DB[TB]>, string>;
+
+type ReturningColumn<DB extends Record<string, any>, TB extends keyof DB & string> =
+	| SelectableColumn<DB, TB>
+	| `${TB}.${SelectableColumn<DB, TB>}`;
+
+type UnqualifiedColumn<TB extends string, C extends string> =
+	C extends `${TB}.${infer Column}` ? Column : C;
+
+type ReturningColumnKey<
+	DB extends Record<string, any>,
+	TB extends keyof DB & string,
+	C extends string,
+> = Extract<UnqualifiedColumn<TB, C>, keyof Selectable<DB[TB]>>;
+
+type ReturningOutput<
+	DB extends Record<string, any>,
+	TB extends keyof DB & string,
+	C extends string,
+> = Pick<Selectable<DB[TB]>, ReturningColumnKey<DB, TB, C>>;
+
+function returningColumns(selection: ReturningSelection): string[] | null {
+	if (!selection) {
+		return null;
+	}
+
+	return (Array.isArray(selection) ? selection : [selection]).map((column) => {
+		const parts = column.split(".");
+		return parts[parts.length - 1] ?? column;
+	});
+}
+
+function mergeReturningSelections(current: ReturningSelection, next: ReturningSelection): ReturningSelection {
+	const currentColumns = returningColumns(current);
+	if (!currentColumns) {
+		return undefined;
+	}
+
+	return [...new Set([...currentColumns, ...(returningColumns(next) ?? [])])];
+}
 
 export class OrmReturningBuilder<
 	DB extends Record<string, any>,
@@ -49,7 +92,26 @@ export class OrmReturningBuilder<
 		private readonly _mutationQuery: any,
 		private readonly _relations: RelationRequest[] = [],
 		private readonly _rootWheres: any[][] = [],
+		private readonly _returning: ReturningSelection = undefined,
 	) {}
+
+	returning<C extends ReturningColumn<DB, TB>>(
+		column: C,
+	): OrmReturningBuilder<DB, TB, O & ReturningOutput<DB, TB, C>, M>;
+	returning<const C extends readonly ReturningColumn<DB, TB>[]>(
+		columns: C,
+	): OrmReturningBuilder<DB, TB, O & ReturningOutput<DB, TB, C[number]>, M>;
+	returning(selection: ReturningColumn<DB, TB> | readonly ReturningColumn<DB, TB>[]): OrmReturningBuilder<DB, TB, any, M> {
+		return new OrmReturningBuilder(
+			this._db,
+			this._meta,
+			this._table,
+			this._mutationQuery,
+			this._relations,
+			this._rootWheres,
+			mergeReturningSelections(this._returning, selection),
+		);
+	}
 
 	withRelated<R extends RelationNames<M, TB>>(
 		name: R,
@@ -92,7 +154,7 @@ export class OrmReturningBuilder<
 			}
 		}
 
-		return new OrmReturningBuilder(this._db, this._meta, this._table, this._mutationQuery, [...this._relations, request], this._rootWheres);
+		return new OrmReturningBuilder(this._db, this._meta, this._table, this._mutationQuery, [...this._relations, request], this._rootWheres, this._returning);
 	}
 
 	mutateRelated(
@@ -113,7 +175,7 @@ export class OrmReturningBuilder<
 			throw new Error("mutateRelated callback must return .update(), .delete(), or .insert()");
 		}
 
-		return new OrmReturningBuilder(this._db, this._meta, this._table, this._mutationQuery, [...this._relations, request], this._rootWheres);
+		return new OrmReturningBuilder(this._db, this._meta, this._table, this._mutationQuery, [...this._relations, request], this._rootWheres, this._returning);
 	}
 
 	/**
@@ -149,15 +211,15 @@ export class OrmReturningBuilder<
 		});
 	}
 
-	async execute(): Promise<(Selectable<DB[TB]> & O)[]> {
+	async execute(): Promise<O[]> {
 		return await this._buildQuery().execute();
 	}
 
-	async executeTakeFirst(): Promise<(Selectable<DB[TB]> & O) | undefined> {
+	async executeTakeFirst(): Promise<O | undefined> {
 		return (await this.execute())[0];
 	}
 
-	async executeTakeFirstOrThrow(error?: Error | (() => Error)): Promise<Selectable<DB[TB]> & O> {
+	async executeTakeFirstOrThrow(error?: Error | (() => Error)): Promise<O> {
 		const r = await this.executeTakeFirst();
 		if (r === undefined) throw error instanceof Error ? error : typeof error === "function" ? error() : new Error(`No "${this._table}" found after mutation`);
 		return r;
@@ -178,8 +240,12 @@ export class OrmReturningBuilder<
 	 * FROM _mutation
 	 */
 	private _buildQuery() {
+		const requestedColumns = returningColumns(this._returning);
+
 		if (this._relations.length === 0) {
-			return this._mutationQuery.returningAll();
+			return requestedColumns
+				? this._mutationQuery.returning(requestedColumns.map((column) => `${this._table}.${column}`))
+				: this._mutationQuery.returningAll();
 		}
 
 		resetCTECounter();
@@ -215,11 +281,32 @@ export class OrmReturningBuilder<
 			}
 		}
 
+		const cteColumns = requestedColumns ? new Set(requestedColumns) : null;
+		if (cteColumns) {
+			for (const rel of this._relations) {
+				cteColumns.add(rel.resolved.fromColumn);
+				for (const condition of rel.config.onConditions) {
+					if (condition.kind === "ref") {
+						cteColumns.add(condition.rhs);
+					}
+				}
+			}
+		}
+
+		const returningMutation = cteColumns
+			? this._mutationQuery.returning([...cteColumns].map((column) => `${this._table}.${column}`))
+			: this._mutationQuery.returningAll();
+
 		// Add the main mutation CTE
 		query = query
-			.with(CTE_ALIAS, () => this._mutationQuery.returningAll())
-			.selectFrom(CTE_ALIAS)
-			.selectAll(CTE_ALIAS);
+			.with(CTE_ALIAS, () => returningMutation)
+			.selectFrom(CTE_ALIAS);
+
+		if (requestedColumns) {
+			query = query.select(requestedColumns.map((column) => `${CTE_ALIAS}.${column}`));
+		} else {
+			query = query.selectAll(CTE_ALIAS);
+		}
 
 		// Add mutation CTE references
 		if (mutationCTEResult) {

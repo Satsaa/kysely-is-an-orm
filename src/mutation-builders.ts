@@ -6,6 +6,7 @@ import {
 	UpdateResult,
 	DeleteQueryBuilder,
 	DeleteResult,
+	type Selectable,
 	type ReferenceExpression,
 	type ComparisonOperatorExpression,
 	type OperandValueExpressionOrList,
@@ -17,6 +18,28 @@ import {
 } from "kysely";
 import { type MetaDB } from "./meta.js";
 import { OrmReturningBuilder } from "./returning-builder.js";
+
+type SelectableColumn<DB extends Record<string, any>, TB extends keyof DB & string> =
+	Extract<keyof Selectable<DB[TB]>, string>;
+
+type ReturningColumn<DB extends Record<string, any>, TB extends keyof DB & string> =
+	| SelectableColumn<DB, TB>
+	| `${TB}.${SelectableColumn<DB, TB>}`;
+
+type UnqualifiedColumn<TB extends string, C extends string> =
+	C extends `${TB}.${infer Column}` ? Column : C;
+
+type ReturningColumnKey<
+	DB extends Record<string, any>,
+	TB extends keyof DB & string,
+	C extends string,
+> = Extract<UnqualifiedColumn<TB, C>, keyof Selectable<DB[TB]>>;
+
+type ReturningOutput<
+	DB extends Record<string, any>,
+	TB extends keyof DB & string,
+	C extends string,
+> = Pick<Selectable<DB[TB]>, ReturningColumnKey<DB, TB, C>>;
 
 // ---------------------------------------------------------------------------
 // OrmInsertQueryBuilder
@@ -42,7 +65,17 @@ export class OrmInsertQueryBuilder<
 		return new OrmInsertQueryBuilder(this._db, this._meta, this._table, this._inner.onConflict(handler));
 	}
 
-	returningAll(): OrmReturningBuilder<DB, TB, {}, M> {
+	returning<C extends ReturningColumn<DB, TB>>(
+		column: C,
+	): OrmReturningBuilder<DB, TB, ReturningOutput<DB, TB, C>, M>;
+	returning<const C extends readonly ReturningColumn<DB, TB>[]>(
+		columns: C,
+	): OrmReturningBuilder<DB, TB, ReturningOutput<DB, TB, C[number]>, M>;
+	returning(selection: ReturningColumn<DB, TB> | readonly ReturningColumn<DB, TB>[]): OrmReturningBuilder<DB, TB, any, M> {
+		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], [], selection);
+	}
+
+	returningAll(): OrmReturningBuilder<DB, TB, Selectable<DB[TB]>, M> {
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], []);
 	}
 
@@ -79,7 +112,17 @@ export class OrmUpdateQueryBuilder<
 		return new OrmUpdateQueryBuilder(this._db, this._meta, this._table, (this._inner as any).where(...args), [...this._wheres, args]);
 	}
 
-	returningAll(): OrmReturningBuilder<DB, TB, {}, M> {
+	returning<C extends ReturningColumn<DB, TB>>(
+		column: C,
+	): OrmReturningBuilder<DB, TB, ReturningOutput<DB, TB, C>, M>;
+	returning<const C extends readonly ReturningColumn<DB, TB>[]>(
+		columns: C,
+	): OrmReturningBuilder<DB, TB, ReturningOutput<DB, TB, C[number]>, M>;
+	returning(selection: ReturningColumn<DB, TB> | readonly ReturningColumn<DB, TB>[]): OrmReturningBuilder<DB, TB, any, M> {
+		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], this._wheres, selection);
+	}
+
+	returningAll(): OrmReturningBuilder<DB, TB, Selectable<DB[TB]>, M> {
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], this._wheres);
 	}
 
@@ -112,7 +155,17 @@ export class OrmDeleteQueryBuilder<
 		return new OrmDeleteQueryBuilder(this._db, this._meta, this._table, (this._inner as any).where(...args), [...this._wheres, args]);
 	}
 
-	returningAll(): OrmReturningBuilder<DB, TB, {}, M> {
+	returning<C extends ReturningColumn<DB, TB>>(
+		column: C,
+	): OrmReturningBuilder<DB, TB, ReturningOutput<DB, TB, C>, M>;
+	returning<const C extends readonly ReturningColumn<DB, TB>[]>(
+		columns: C,
+	): OrmReturningBuilder<DB, TB, ReturningOutput<DB, TB, C[number]>, M>;
+	returning(selection: ReturningColumn<DB, TB> | readonly ReturningColumn<DB, TB>[]): OrmReturningBuilder<DB, TB, any, M> {
+		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], this._wheres, selection);
+	}
+
+	returningAll(): OrmReturningBuilder<DB, TB, Selectable<DB[TB]>, M> {
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], this._wheres);
 	}
 
