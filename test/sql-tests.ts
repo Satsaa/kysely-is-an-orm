@@ -54,6 +54,22 @@ interface UsagePeriodTable {
 	updated_at: Generated<Timestamp>;
 }
 
+interface EmailMessageTable {
+	id: Generated<string>;
+	thread_id: string;
+	subject: string | null;
+	from_address: string;
+	body_text: string | null;
+	received_at: Timestamp;
+	direction: string;
+	suggested_action: string | null;
+}
+
+interface EmailThreadTable {
+	id: Generated<string>;
+	mailbox_id: string;
+}
+
 interface Database {
 	markets: MarketTable;
 	sellers: SellerTable;
@@ -61,6 +77,8 @@ interface Database {
 	market_tags: MarketTagTable;
 	market_tag_joins: MarketTagJoinTable;
 	usage_periods: UsagePeriodTable;
+	email_messages: EmailMessageTable;
+	email_threads: EmailThreadTable;
 }
 
 const meta = {
@@ -229,6 +247,32 @@ async function runTests() {
 		assertContains(n, 'left join "items"', "has left join");
 		assertContains(n, '"markets"."active" = $1', "has joined-table where");
 		assert(parameters.includes(true), "joined-table where parameter is true");
+	});
+
+	await test("native innerJoin compiles for email message/thread query", () => {
+		const { sql, parameters } = db
+			.selectFrom("email_messages")
+			.innerJoin("email_threads", "email_threads.id", "email_messages.thread_id")
+			.select([
+				"email_messages.id as message_id",
+				"email_messages.subject",
+				"email_messages.from_address",
+				"email_messages.body_text",
+				"email_messages.received_at",
+				"email_messages.suggested_action as ai_action",
+			])
+			.where("email_threads.mailbox_id", "=", "mailbox-1")
+			.where("email_messages.direction", "=", "inbound")
+			.orderBy("email_messages.received_at", "desc")
+			.limit(30)
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'from "email_messages"', "has email_messages from");
+		assertContains(n, 'inner join "email_threads"', "has email_threads inner join");
+		assertContains(n, '"email_threads"."mailbox_id" = $1', "has mailbox filter");
+		assertContains(n, '"email_messages"."direction" = $2', "has direction filter");
+		assert(parameters.includes("mailbox-1"), "has mailbox parameter");
+		assert(parameters.includes("inbound"), "has direction parameter");
 	});
 
 	// -----------------------------------------------------------------------
