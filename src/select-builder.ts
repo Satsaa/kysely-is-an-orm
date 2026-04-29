@@ -14,6 +14,11 @@ import {
 	type Selection,
 	type CallbackSelection,
 	type Selectable,
+	type JoinCallbackExpression,
+	type JoinReferenceExpression,
+	type SelectQueryBuilderWithInnerJoin,
+	type SelectQueryBuilderWithLeftJoin,
+	type TableExpression,
 } from "kysely";
 import { type MetaDB } from "./meta.js";
 import type {
@@ -44,6 +49,9 @@ import {
 } from "./helpers.js";
 
 type AnyMeta = MetaDB<Record<string, any>>;
+type TablesOf<Q> = Q extends SelectQueryBuilder<any, infer T, any> ? T : never;
+type JoinedTables<DB extends Record<string, any>, TB extends keyof DB & string, Q> =
+	TB | Extract<TablesOf<Q>, keyof DB & string>;
 
 export class OrmSelectQueryBuilder<
 	DB extends Record<string, any>,
@@ -110,6 +118,68 @@ export class OrmSelectQueryBuilder<
 
 	selectAll(): OrmSelectQueryBuilder<DB, TB, Selectable<DB[TB]>, M, true, EC> {
 		return new OrmSelectQueryBuilder<DB, TB, Selectable<DB[TB]>, M, true, EC>(this._db, this._meta, this._table, this._inner.selectAll(this._table), this._relations, true, this._fallbackVariants, this._wheres);
+	}
+
+	innerJoin<TE extends TableExpression<DB, TB>, K1 extends JoinReferenceExpression<DB, TB, TE>, K2 extends JoinReferenceExpression<DB, TB, TE>>(
+		table: TE,
+		k1: K1,
+		k2: K2,
+	): OrmSelectQueryBuilder<DB, JoinedTables<DB, TB, SelectQueryBuilderWithInnerJoin<DB, TB, O, TE>>, O, M, S, EC>;
+	innerJoin<TE extends TableExpression<DB, TB>, FN extends JoinCallbackExpression<DB, TB, TE>>(
+		table: TE,
+		callback: FN,
+	): OrmSelectQueryBuilder<DB, JoinedTables<DB, TB, SelectQueryBuilderWithInnerJoin<DB, TB, O, TE>>, O, M, S, EC>;
+	innerJoin<TE extends TableExpression<DB, TB>>(
+		table: TE,
+		k1OrCallback: JoinReferenceExpression<DB, TB, TE> | JoinCallbackExpression<DB, TB, TE>,
+		k2?: JoinReferenceExpression<DB, TB, TE>,
+	): OrmSelectQueryBuilder<DB, JoinedTables<DB, TB, SelectQueryBuilderWithInnerJoin<DB, TB, O, TE>>, O, M, S, EC> {
+		type JoinedBuilder = SelectQueryBuilderWithInnerJoin<DB, TB, O, TE>;
+		type JoinedTable = JoinedTables<DB, TB, JoinedBuilder>;
+		const inner = k2 === undefined
+			? this._inner.innerJoin(table, k1OrCallback as JoinCallbackExpression<DB, TB, TE>)
+			: this._inner.innerJoin(table, k1OrCallback as JoinReferenceExpression<DB, TB, TE>, k2);
+		return new OrmSelectQueryBuilder<DB, JoinedTable, O, M, S, EC>(
+			this._db,
+			this._meta,
+			this._table,
+			inner as SelectQueryBuilder<DB, JoinedTable, O>,
+			this._relations,
+			this._hasExplicitSelect,
+			this._fallbackVariants,
+			this._wheres,
+		);
+	}
+
+	leftJoin<TE extends TableExpression<DB, TB>, K1 extends JoinReferenceExpression<DB, TB, TE>, K2 extends JoinReferenceExpression<DB, TB, TE>>(
+		table: TE,
+		k1: K1,
+		k2: K2,
+	): OrmSelectQueryBuilder<DB, JoinedTables<DB, TB, SelectQueryBuilderWithLeftJoin<DB, TB, O, TE>>, O, M, S, EC>;
+	leftJoin<TE extends TableExpression<DB, TB>, FN extends JoinCallbackExpression<DB, TB, TE>>(
+		table: TE,
+		callback: FN,
+	): OrmSelectQueryBuilder<DB, JoinedTables<DB, TB, SelectQueryBuilderWithLeftJoin<DB, TB, O, TE>>, O, M, S, EC>;
+	leftJoin<TE extends TableExpression<DB, TB>>(
+		table: TE,
+		k1OrCallback: JoinReferenceExpression<DB, TB, TE> | JoinCallbackExpression<DB, TB, TE>,
+		k2?: JoinReferenceExpression<DB, TB, TE>,
+	): OrmSelectQueryBuilder<DB, JoinedTables<DB, TB, SelectQueryBuilderWithLeftJoin<DB, TB, O, TE>>, O, M, S, EC> {
+		type JoinedBuilder = SelectQueryBuilderWithLeftJoin<DB, TB, O, TE>;
+		type JoinedTable = JoinedTables<DB, TB, JoinedBuilder>;
+		const inner = k2 === undefined
+			? this._inner.leftJoin(table, k1OrCallback as JoinCallbackExpression<DB, TB, TE>)
+			: this._inner.leftJoin(table, k1OrCallback as JoinReferenceExpression<DB, TB, TE>, k2);
+		return new OrmSelectQueryBuilder<DB, JoinedTable, O, M, S, EC>(
+			this._db,
+			this._meta,
+			this._table,
+			inner as SelectQueryBuilder<DB, JoinedTable, O>,
+			this._relations,
+			this._hasExplicitSelect,
+			this._fallbackVariants,
+			this._wheres,
+		);
 	}
 
 	project<V extends ProjectionNames<M, TB>>(

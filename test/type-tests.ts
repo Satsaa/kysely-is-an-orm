@@ -16,7 +16,7 @@ import type {
 	HasKey,
 	NotHasKey,
 } from "type-test-core";
-import { Kysely, type Generated, type Selectable } from "kysely";
+import { Kysely, type ColumnType, type Generated, type Selectable } from "kysely";
 import { createOrm, type MetaDB } from "../src/index.js";
 
 // ============================================================================
@@ -56,12 +56,24 @@ interface MarketTagJoinTable {
 	tag_id: number;
 }
 
+type Timestamp = ColumnType<Date, Date | string, Date | string>;
+
+interface UsagePeriodTable {
+	tenant_id: string;
+	period_start: Timestamp;
+	metric: string;
+	note: string | null;
+	count: Generated<number>;
+	updated_at: Generated<Timestamp>;
+}
+
 interface Database {
 	markets: MarketTable;
 	sellers: SellerTable;
 	items: ItemTable;
 	market_tags: MarketTagTable;
 	market_tag_joins: MarketTagJoinTable;
+	usage_periods: UsagePeriodTable;
 }
 
 // ============================================================================
@@ -378,6 +390,34 @@ async function testNestedWithRelated() {
 }
 
 // ============================================================================
+// 7b. Native Kysely joins remain available on the ORM select builder
+// ============================================================================
+
+async function testNativeJoinTypes() {
+	const rows = await db
+		.selectFrom("sellers")
+		.innerJoin("markets", "markets.id", "sellers.market_id")
+		.leftJoin("items", "items.seller_id", "sellers.id")
+		.select([
+			"sellers.id as seller_id",
+			"markets.name as market_name",
+			"items.name as item_name",
+		])
+		.where("markets.active", "=", true)
+		.execute();
+
+	type Row = typeof rows[0];
+	type _J1 = Expect<HasKey<Row, "seller_id">>;
+	type _J2 = Expect<HasKey<Row, "market_name">>;
+	type _J3 = Expect<HasKey<Row, "item_name">>;
+
+	db.selectFrom("sellers")
+		.innerJoin("markets", "markets.id", "sellers.market_id")
+		// @ts-expect-error - joined table has no such column
+		.select("markets.not_a_column");
+}
+
+// ============================================================================
 // 8. Builder callback: alias, ON conditions
 // ============================================================================
 
@@ -673,6 +713,55 @@ async function testInsertTypes() {
 
 	type DefIns = typeof defMkt;
 	type _I11 = Expect<HasKey<DefIns, "id">>;
+}
+
+async function testNestedGeneratedColumnTypeMutationValues() {
+	db.insertInto("usage_periods").values({
+		tenant_id: "tenant-1",
+		period_start: "2026-04-01T00:00:00.000Z",
+		metric: "chat",
+		count: 1,
+		updated_at: new Date(),
+	});
+
+	// Nullable columns may be omitted or explicitly set on insert.
+	db.insertInto("usage_periods").values({
+		tenant_id: "tenant-1",
+		period_start: new Date(),
+		metric: "chat",
+		note: null,
+	});
+
+	db.updateTable("usage_periods")
+		.set({
+			period_start: new Date(),
+			updated_at: "2026-04-01T00:00:00.000Z",
+		})
+		.where("tenant_id", "=", "tenant-1");
+
+	// Generated nested ColumnType columns remain optional on insert.
+	db.insertInto("usage_periods").values({
+		tenant_id: "tenant-1",
+		period_start: new Date(),
+		metric: "chat",
+	});
+
+	db.insertInto("usage_periods")
+		.values({
+			tenant_id: "tenant-1",
+			period_start: new Date(),
+			metric: "chat",
+		})
+		.onConflict((oc) => oc.columns(["tenant_id", "period_start", "metric"]).doUpdateSet({
+			count: 2,
+			updated_at: new Date(),
+		}));
+
+	// @ts-expect-error - required non-generated column is still required
+	db.insertInto("usage_periods").values({ tenant_id: "tenant-1", metric: "chat" });
+
+	// @ts-expect-error - invalid value type is still rejected
+	db.updateTable("usage_periods").set({ updated_at: 123 });
 }
 
 // ============================================================================

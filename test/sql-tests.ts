@@ -3,7 +3,7 @@
  * Verifies generated SQL via .compile() without needing a real database.
  */
 
-import { Kysely, PostgresDialect, type Generated } from "kysely";
+import { Kysely, PostgresDialect, type ColumnType, type Generated } from "kysely";
 import { createOrm, type MetaDB } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
@@ -43,12 +43,24 @@ interface MarketTagJoinTable {
 	tag_id: number;
 }
 
+type Timestamp = ColumnType<Date, Date | string, Date | string>;
+
+interface UsagePeriodTable {
+	tenant_id: string;
+	period_start: Timestamp;
+	metric: string;
+	note: string | null;
+	count: Generated<number>;
+	updated_at: Generated<Timestamp>;
+}
+
 interface Database {
 	markets: MarketTable;
 	sellers: SellerTable;
 	items: ItemTable;
 	market_tags: MarketTagTable;
 	market_tag_joins: MarketTagJoinTable;
+	usage_periods: UsagePeriodTable;
 }
 
 const meta = {
@@ -198,6 +210,25 @@ async function runTests() {
 		assertContains(norm(sql), '"id"', "has id");
 		assertContains(norm(sql), '"name"', "has name");
 		assertNotContains(norm(sql), '"markets".*', "no selectAll");
+	});
+
+	await test("native joins compile through the ORM select builder", () => {
+		const { sql, parameters } = db
+			.selectFrom("sellers")
+			.innerJoin("markets", "markets.id", "sellers.market_id")
+			.leftJoin("items", "items.seller_id", "sellers.id")
+			.select([
+				"sellers.id as seller_id",
+				"markets.name as market_name",
+				"items.name as item_name",
+			])
+			.where("markets.active", "=", true)
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'inner join "markets"', "has inner join");
+		assertContains(n, 'left join "items"', "has left join");
+		assertContains(n, '"markets"."active" = $1', "has joined-table where");
+		assert(parameters.includes(true), "joined-table where parameter is true");
 	});
 
 	// -----------------------------------------------------------------------
@@ -551,6 +582,25 @@ async function runTests() {
 		assertContains(n, 'insert into "markets"', "has INSERT INTO");
 		assertContains(n, '"name"', "has name column");
 		assert(parameters.includes("Test Market"), "has parameter");
+	});
+
+	await test("insertInto: nested Generated<ColumnType> values compile", () => {
+		const now = new Date("2026-04-01T00:00:00.000Z");
+		const { sql, parameters } = db
+			.insertInto("usage_periods")
+			.values({
+				tenant_id: "tenant-1",
+				period_start: now,
+				metric: "chat",
+				count: 1,
+				updated_at: "2026-04-01T00:00:00.000Z",
+			})
+			.compile();
+		const n = norm(sql);
+		assertContains(n, 'insert into "usage_periods"', "has usage period insert");
+		assert(parameters.includes("tenant-1"), "has tenant parameter");
+		assert(parameters.includes(now), "has Date parameter");
+		assert(parameters.includes("2026-04-01T00:00:00.000Z"), "has string timestamp parameter");
 	});
 
 	await test("insertInto: returningAll without relations", () => {
