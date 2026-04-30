@@ -42,11 +42,17 @@ type ReturningColumnKey<
 	C extends string,
 > = Extract<UnqualifiedColumn<TB, C>, keyof Selectable<DB[TB]>>;
 
+type DeepSelectType<T> = T extends ColumnType<infer S, any, any> ? DeepSelectType<S> : T;
+
+type DeepSelectable<R> = {
+	[K in keyof Selectable<R>]: DeepSelectType<Selectable<R>[K]>;
+};
+
 type ReturningOutput<
 	DB extends Record<string, any>,
 	TB extends keyof DB & string,
 	C extends string,
-> = Pick<Selectable<DB[TB]>, ReturningColumnKey<DB, TB, C>>;
+> = Pick<DeepSelectable<DB[TB]>, ReturningColumnKey<DB, TB, C>>;
 
 type DeepInsertType<T> = T extends ColumnType<any, infer I, any>
 	? undefined extends I
@@ -130,7 +136,7 @@ export class OrmInsertQueryBuilder<
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], [], selection);
 	}
 
-	returningAll(): OrmReturningBuilder<DB, TB, Selectable<DB[TB]>, M> {
+	returningAll(): OrmReturningBuilder<DB, TB, DeepSelectable<DB[TB]>, M> {
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], []);
 	}
 
@@ -177,7 +183,7 @@ export class OrmUpdateQueryBuilder<
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], this._wheres, selection);
 	}
 
-	returningAll(): OrmReturningBuilder<DB, TB, Selectable<DB[TB]>, M> {
+	returningAll(): OrmReturningBuilder<DB, TB, DeepSelectable<DB[TB]>, M> {
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], this._wheres);
 	}
 
@@ -220,7 +226,7 @@ export class OrmDeleteQueryBuilder<
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], this._wheres, selection);
 	}
 
-	returningAll(): OrmReturningBuilder<DB, TB, Selectable<DB[TB]>, M> {
+	returningAll(): OrmReturningBuilder<DB, TB, DeepSelectable<DB[TB]>, M> {
 		return new OrmReturningBuilder(this._db, this._meta, this._table, this._inner, [], this._wheres);
 	}
 

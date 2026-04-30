@@ -67,6 +67,14 @@ interface UsagePeriodTable {
 	updated_at: Generated<Timestamp>;
 }
 
+interface PhoneCallTable {
+	id: Generated<string>;
+	phone_agent_id: string;
+	started_at: Generated<Timestamp>;
+	ended_at: Timestamp | null;
+	status: Generated<string>;
+}
+
 interface EmailMessageTable {
 	id: Generated<string>;
 	thread_id: string;
@@ -90,6 +98,7 @@ interface Database {
 	market_tags: MarketTagTable;
 	market_tag_joins: MarketTagJoinTable;
 	usage_periods: UsagePeriodTable;
+	phone_calls: PhoneCallTable;
 	email_messages: EmailMessageTable;
 	email_threads: EmailThreadTable;
 }
@@ -755,6 +764,21 @@ async function testInsertTypes() {
 }
 
 async function testNestedGeneratedColumnTypeMutationValues() {
+	const updatedCall = await db
+		.updateTable("phone_calls")
+		.set({
+			status: "ended",
+			ended_at: new Date(),
+		})
+		.where("id", "=", "call-1")
+		.returning(["id", "phone_agent_id", "started_at", "ended_at", "status"])
+		.executeTakeFirstOrThrow();
+
+	const startedAt: Date = updatedCall.started_at;
+	const endedAt: Date | null = updatedCall.ended_at;
+	startedAt.getTime();
+	endedAt?.getTime();
+
 	db.insertInto("usage_periods").values({
 		tenant_id: "tenant-1",
 		period_start: "2026-04-01T00:00:00.000Z",

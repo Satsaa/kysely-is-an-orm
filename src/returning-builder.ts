@@ -1,6 +1,7 @@
 import {
 	Kysely,
 	sql,
+	type ColumnType,
 	type Selectable,
 } from "kysely";
 import { type MetaDB } from "./meta.js";
@@ -53,11 +54,17 @@ type ReturningColumnKey<
 	C extends string,
 > = Extract<UnqualifiedColumn<TB, C>, keyof Selectable<DB[TB]>>;
 
+type DeepSelectType<T> = T extends ColumnType<infer S, any, any> ? DeepSelectType<S> : T;
+
+type DeepSelectable<R> = {
+	[K in keyof Selectable<R>]: DeepSelectType<Selectable<R>[K]>;
+};
+
 type ReturningOutput<
 	DB extends Record<string, any>,
 	TB extends keyof DB & string,
 	C extends string,
-> = Pick<Selectable<DB[TB]>, ReturningColumnKey<DB, TB, C>>;
+> = Pick<DeepSelectable<DB[TB]>, ReturningColumnKey<DB, TB, C>>;
 
 function returningColumns(selection: ReturningSelection): string[] | null {
 	if (!selection) {
